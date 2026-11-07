@@ -37,6 +37,8 @@ https://www.nist.gov/itl/products-and-services/emnist-dataset and run
 
 ## Results
 
+> **v1.1 (2026-11-08)** - KITTI-MOTS instance results added (section below, video-segmentation stage of the series) with their weights in Release v1.1. The FL36-Seg results, defaults and Release v1.0 are unchanged.
+
 Test set: FL36-Seg test (1,024 images, 6,699 objects, 36 classes), after 30 epochs (4.3 h on an RTX 4070 Laptop GPU).
 
 | | AP50 | AP75 | **AP50:95** | Recall (IoU 0.5) |
@@ -57,6 +59,60 @@ Convergence (test AP50 every 5 epochs):
 Protocol: 30 epochs, Adam lr 1e-4 (constant), effective batch 8 (micro batch 2 x 4 accumulation), input 608, seed 777,
 no pretraining; augmentation: horizontal flip + the basic YOLO-paper augmentation (random scale / translation 20 %,
 HSV hue 0.1, saturation / exposure 1.5); test evaluation every 5 epochs.
+
+## KITTI-MOTS (v1.1, video-segmentation stage)
+
+`cascade_mask_rcnn_km`: the same Cascade Mask R-CNN, started from the MOT-stage `cascade_rcnn` detector (KITTI-MOTS train, 30 epochs, 1216 x 384) so
+only the mask branch is new; trained on the KITTI-MOTS instance masks (car, pedestrian), wide canvas 1216 x 384, Adam
+1e-4, seed 777. Test = KITTI-MOTS val (9 sequences, 2,981 frames). Protocol difference to the FL36-Seg result
+above: detector initialisation instead of training from scratch.
+
+The three instance models of the stage:
+
+| model | epochs | box AP50 | mask AP50 | mask AP50:95 | images / s |
+| --- | --- | --- | --- | --- | --- |
+| Mask R-CNN | 6 | 0.773 | 0.712 | 0.428 | 21.1 |
+| Mask R-CNN | 20 (used by the MOTS rows below) | 0.766 | 0.727 | 0.469 | 20.6 |
+| Cascade Mask R-CNN | 20 | 0.777 | 0.743 | 0.485 | 17.5 |
+| YOLO11-seg | 8 | 0.705 | 0.639 | 0.358 | 33.8 |
+
+### MOTS on KITTI-MOTS val (TrackEval KittiMOTS, car / pedestrian mean)
+
+| method (this model's boxes) | det. epochs | mask HOTA | DetA | AssA | sMOTSA | car / ped. HOTA | STQ (FCN semantic) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Seg2Track-SAM2, detection threshold 0.8 | - | **0.591** | 0.533 | 0.661 | 0.425 | 0.644 / 0.538 | 0.562 |
+| Hybrid-SORT + SAM2.1-L frame masks | 20 | **0.591** | 0.539 | 0.652 | 0.514 | 0.694 / 0.488 | 0.513 |
+| Seg2Track-SAM2, detection threshold 0.9 | - | **0.586** | 0.534 | 0.647 | 0.448 | 0.639 / 0.532 | 0.560 |
+| BoT-SORT + own masks | 20 | **0.578** | 0.543 | 0.618 | 0.484 | 0.695 / 0.460 | 0.553 |
+| Seg2Track-SAM2, detection threshold 0.5 (official) | - | **0.574** | 0.507 | 0.655 | 0.312 | 0.631 / 0.518 | 0.562 |
+| ByteTrack + own masks | 20 | **0.564** | 0.528 | 0.604 | 0.482 | 0.684 / 0.443 | 0.513 |
+| Hybrid-SORT + own masks | 20 | **0.558** | 0.507 | 0.618 | 0.471 | 0.668 / 0.448 | 0.504 |
+| OC-SORT + own masks | 20 | **0.530** | 0.485 | 0.581 | 0.463 | 0.655 / 0.404 | 0.485 |
+
+- own masks = the masks of this model on the tracked boxes; SAM2 frame masks = SAM2.1-large prompted per frame with the
+  same tracked boxes (no memory). Seg2Track-SAM2 = tracking by segmentation with this model's detections.
+
+Usage: KITTI images and KITTI-STEP as below, KITTI-MOTS instance PNGs from KITTI-STEP, VOC layout of the MOT stage,
+then training from the MOT detector weights (Release v1.0 of `Statera-Workshop/MOT_Detectors_KITTIMOTS`):
+
+```bash
+mkdir -p ~/Physical_AI/datasets/downloads && cd ~/Physical_AI/datasets/downloads
+wget -c https://s3.eu-central-1.amazonaws.com/avg-kitti/data_tracking_image_2.zip     # KITTI tracking images
+wget -c http://storage.googleapis.com/gresearch/tf-deeplab/data/kitti-step.tar.gz      # KITTI-STEP labels
+unzip -q data_tracking_image_2.zip 'training/image_02/*' -d ~/Physical_AI/datasets/KITTI_MOTS
+tar -xzf kitti-step.tar.gz -C ~/Physical_AI/datasets/                                  # -> datasets/kitti-step
+```
+
+```bash
+python tools/mot/step_to_mots_png.py          # -> datasets/KITTI_MOTS/instances (KITTI-MOTS encoding)
+python tools/mot/kittimots_to_voc.py          # -> datasets/KITTI_MOTS_VOC (boxes, ignore regions, splits)
+export UNIFIED_SEG_DATASET=kittimots UNIFIED_IMAGE_H=384
+UNIFIED_INIT_CKPT=image_cascade_rcnn_kittimots_e030.pth python train_seg_cascade_mask_rcnn_km.py --epochs 20
+python evaluate_seg_cascade_mask_rcnn_km.py --weights seg_cascade_mask_rcnn_km_kittimots_e020.pth
+```
+
+Weights: Release v1.1 (`seg_cascade_mask_rcnn_km_kittimots_e020.pth`).
+KITTI / KITTI-MOTS / KITTI-STEP are CC BY-NC-SA 3.0 (non-commercial); the weights inherit it.
 
 ## Usage
 
